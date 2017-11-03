@@ -20,8 +20,8 @@ import (
 )
 
 type Config struct {
-	Region string // optional
-	Name   string // optional
+	Region string
+	Name   string
 }
 
 type Thing struct {
@@ -75,51 +75,12 @@ func main() {
 	}
 	gg_core_name := cfg.Name + "_core"
 	gg_group_name := cfg.Name + "_group"
+	gg_policy_name := cfg.Name + "_policy"
 
 	sess := session.Must(session.NewSession(awscfg))
 
 	iot_svc := iot.New(sess)
 	gg_svc := greengrass.New(sess)
-
-	lc, err := gg_svc.ListCoreDefinitions(&greengrass.ListCoreDefinitionsInput{})
-	if err != nil {
-		fmt.Println(err)
-	}
-	for _, value := range lc.Definitions {
-		fmt.Println("Deleting Core ID: ", *value.Id)
-		_, err := gg_svc.DeleteCoreDefinition(&greengrass.DeleteCoreDefinitionInput{
-			CoreDefinitionId: value.Id,
-		})
-		if err != nil {
-			fmt.Println(err)
-		}
-	}
-	lf, err := gg_svc.ListFunctionDefinitions(&greengrass.ListFunctionDefinitionsInput{})
-	if err != nil {
-		fmt.Println(err)
-	}
-	for _, value := range lf.Definitions {
-		fmt.Println("Deleting Func ID: ", *value.Id)
-		_, err := gg_svc.DeleteFunctionDefinition(&greengrass.DeleteFunctionDefinitionInput{
-			FunctionDefinitionId: value.Id,
-		})
-		if err != nil {
-			fmt.Println(err)
-		}
-	}
-	lg, err := gg_svc.ListGroups(&greengrass.ListGroupsInput{})
-	if err != nil {
-		fmt.Println(err)
-	}
-	for _, value := range lg.Groups {
-		fmt.Println("Deleting group ID: ", *value.Id)
-		_, err := gg_svc.DeleteGroup(&greengrass.DeleteGroupInput{
-			GroupId: value.Id,
-		})
-		if err != nil {
-			fmt.Println(err)
-		}
-	}
 
 	csrTmpl := &x509.CertificateRequest{}
 	csrTmpl.Subject.CommonName = "NXP DCCA IOT"
@@ -131,6 +92,7 @@ func main() {
 		fmt.Println(err)
 	}
 
+	fmt.Println("Create Certificate Request")
 	csrData, err := x509.CreateCertificateRequest(rand.Reader, csrTmpl, priv)
 	if err != nil {
 		fmt.Println(err)
@@ -156,7 +118,23 @@ func main() {
 	})
 	if err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
+	doc := `{"Version":"2012-10-17","Statement": [{"Effect": "Allow","Action": ["iot:Publish","iot:Subscribe","iot:Connect","iot:Receive"],"Resource": ["*"]},{"Effect": "Allow","Action": ["iot:GetThingShadow","iot:UpdateThingShadow","iot:DeleteThingShadow"],"Resource": ["*"]},{"Effect": "Allow","Action": ["greengrass:*"],"Resource": ["*"]}]}`
+
+	_, err = iot_svc.CreatePolicy(&iot.CreatePolicyInput{
+		PolicyDocument: &doc,
+		PolicyName:     &gg_policy_name})
+	if err != nil {
+		fmt.Println(err)
+	}
+	_, err = iot_svc.AttachPrincipalPolicy(&iot.AttachPrincipalPolicyInput{
+		PolicyName: &gg_policy_name,
+		Principal:  cert.CertificateArn})
+	if err != nil {
+		fmt.Println(err)
+	}
+
 	_, err = iot_svc.AttachThingPrincipal(&iot.AttachThingPrincipalInput{
 		Principal: cert.CertificateArn,
 		ThingName: ct.ThingName,
@@ -165,7 +143,7 @@ func main() {
 		fmt.Println(err)
 	}
 
-	fmt.Println(*ct.ThingArn)
+	fmt.Println("Create GreenGrass Core Definition")
 	cc, err := gg_svc.CreateCoreDefinition(&greengrass.CreateCoreDefinitionInput{
 		Name: &gg_core_name,
 	})
@@ -184,7 +162,7 @@ func main() {
 	}
 	cores[0] = core
 
-	fmt.Println(cores)
+	fmt.Println("Create GreenGrass Core Definition Version")
 	cv, err := gg_svc.CreateCoreDefinitionVersion(&greengrass.CreateCoreDefinitionVersionInput{
 		CoreDefinitionId: cc.Id,
 		Cores:            cores,
@@ -194,14 +172,7 @@ func main() {
 	}
 	fmt.Println(*cv.Arn)
 
-	//	cd, err := gg_svc.CreateDeviceDefinition(&greengrass.CreateDeviceDefinitionInput{
-	//		Name: &cfg.Name,
-	//	})
-	//	if err != nil {
-	//		fmt.Println(err)
-	//	}
-	//	fmt.Println(cd)
-
+	fmt.Println("Create GreenGrass Function Definition")
 	cf, err := gg_svc.CreateFunctionDefinition(&greengrass.CreateFunctionDefinitionInput{
 		Name: &cfg.Name,
 	})
@@ -210,9 +181,8 @@ func main() {
 	}
 	fmt.Println(*cf.Arn)
 
+	fmt.Println("Create GreenGrass Function Configuration")
 	func_conf := &greengrass.FunctionConfiguration{
-		//	Environment: &greengrass.FunctionConfigurationEnvironment{},
-		//		ExecArgs:    aws.String(""),
 		Executable: aws.String("messageLambda.message_handler"),
 		MemorySize: aws.Int64(1024),
 		Timeout:    aws.Int64(10),
@@ -226,16 +196,7 @@ func main() {
 	}
 	lfuncs[0] = lfunc
 
-	//cfv, err := gg_svc.CreateFunctionDefinitionVersion(&greengrass.CreateFunctionDefinitionVersionInput{
-	//	FunctionDefinitionId: cf.Id,
-	//	Functions:            lfuncs,
-	//})
-	//if err != nil {
-	//	fmt.Println(err)
-	//}
-	//fmt.Println(cfv)
-
-	fmt.Println("core_version: ", cv)
+	fmt.Println("Create Group")
 	cg, err := gg_svc.CreateGroup(&greengrass.CreateGroupInput{
 		Name: &gg_group_name,
 	})
@@ -244,6 +205,7 @@ func main() {
 	}
 	fmt.Println(*cg.Arn)
 
+	fmt.Println("Create Group Version")
 	gv, err := gg_svc.CreateGroupVersion(&greengrass.CreateGroupVersionInput{
 		CoreDefinitionVersionArn: cv.Arn,
 		GroupId:                  cg.Id,
@@ -251,20 +213,20 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-	fmt.Println(gv)
+	fmt.Println(gv.Arn)
 
 	ced, err := iot_svc.DescribeEndpoint(&iot.DescribeEndpointInput{})
 	if err != nil {
 		fmt.Println(err)
 	}
-	fmt.Println(ced)
+	fmt.Println("Core EndPoint: ", *ced.EndpointAddress)
 
 	gg_config := &CoreConfig{
 		CoreThing: Thing{
-			CaPath:   "/greengrass/certs/rootCA.pem",
-			CertPath: "/greengrass/certs/gg_core_cert.pem",
-			KeyPath:  "/greengrass/certs/gg_core_priv.key",
-			ThingArn: *cc.Arn,
+			CaPath:   "rootCA.pem",
+			CertPath: "gg_core_cert.pem",
+			KeyPath:  "gg_core_priv.key",
+			ThingArn: *ct.ThingArn,
 			IotHost:  *ced.EndpointAddress,
 			GgHost:   fmt.Sprintf("greengrass.iot.%s.amazonaws.com", cfg.Region),
 		},
@@ -276,7 +238,7 @@ func main() {
 	}
 
 	b, err := json.Marshal(gg_config)
-	fmt.Println(string(b))
+	fmt.Println("Writing GreenGrass Configuration")
 	if err != nil {
 		fmt.Println("error:", err)
 	}
